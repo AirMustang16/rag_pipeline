@@ -2,7 +2,6 @@ fastapi>=0.112
 uvicorn[standard]>=0.30
 pinecone>=5.0.0
 openai>=1.43.0
-sentence-transformers>=3.0.0
 numpy>=1.26
 pandas>=2.1
 python-dotenv>=1.0

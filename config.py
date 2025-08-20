@@ -14,18 +14,12 @@ PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_NAMESPACE = os.getenv("PINECONE_NAMESPACE", "default")
 
-# Embeddings
-EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", "auto")  # auto|openai|sbert
+# Embeddings (OpenAI only)
 OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small")  # 1536
-SBERT_MODEL = os.getenv("RAG_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")  # 384
 
-# LLM
+# LLM (OpenAI only)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 
 # Retrieval / chunking
 TOP_K = int(os.getenv("RAG_TOP_K", "5"))

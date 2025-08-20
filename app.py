@@ -23,35 +23,26 @@ class QueryRequest(BaseModel):
 
 
 def _llm_client():
-    # Prefer OpenAI, else DeepSeek (OpenAI-compatible)
-    if config.OPENAI_API_KEY:
-        from openai import OpenAI
-        return "openai", OpenAI()
-    if config.DEEPSEEK_API_KEY:
-        from openai import OpenAI
-        return "deepseek", OpenAI(api_key=config.DEEPSEEK_API_KEY, base_url=config.DEEPSEEK_BASE_URL)
-    return None, None
+    from openai import OpenAI
+    return OpenAI()
 
 
 def _rewrite_query(user_query: str, history: Optional[List[Dict[str, str]]]) -> str:
-    provider, client = _llm_client()
-    if not client:
-        return user_query
+    client = _llm_client()
     sys = "Rewrite the user query to be best for semantic search over software product reviews. Keep it short; no punctuation."
     msgs = [{"role": "system", "content": sys}]
     if history:
         msgs += history[-4:]
     msgs.append({"role": "user", "content": user_query})
-    model = config.OPENAI_MODEL if provider == "openai" else config.DEEPSEEK_MODEL
     try:
-        out = client.chat.completions.create(model=model, messages=msgs, temperature=0.2, max_tokens=32)
+        out = client.chat.completions.create(model=config.OPENAI_MODEL, messages=msgs, temperature=0.2, max_tokens=32)
         return out.choices[0].message.content.strip()
     except Exception:
         return user_query
 
 
 def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    provider, client = _llm_client()
+    client = _llm_client()
     citations = []
     for i, m in enumerate(contexts, 1):
         meta = m["metadata"]
@@ -64,16 +55,6 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
             "date": meta.get("date"),
             "snippet": meta.get("text"),
         })
-    if not client:
-        return {
-            "answer": "LLM not configured. Returning top retrieved snippets.",
-            "citations": citations,
-            "follow_ups": [
-                "What are the top praised features?",
-                "What common pain points do users mention?",
-                "Show feedback about performance or speed.",
-            ],
-        }
     context_text = "\n\n".join([f"[{i}] {c['snippet']}" for i, c in enumerate(citations, 1)])
     sys = (
         "You are a helpful assistant answering questions using the provided review snippets. "
@@ -84,9 +65,8 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
         f"Context snippets:\n{context_text}\n\n"
         "Answer the question using only the context above. Then provide 2-3 short follow-up suggestions."
     )
-    model = config.OPENAI_MODEL if provider == "openai" else config.DEEPSEEK_MODEL
     out = client.chat.completions.create(
-        model=model,
+        model=config.OPENAI_MODEL,
         messages=[{"role": "system", "content": sys}, {"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=500,
