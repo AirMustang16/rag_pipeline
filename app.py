@@ -1,4 +1,5 @@
 from typing import List, Optional, Dict, Any
+import json
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import config
@@ -80,6 +81,136 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
     return {"answer": answer, "citations": citations, "follow_ups": follow_ups}
 
 
+def _sanitize_pinecone_filter(raw: Any) -> Optional[Dict[str, Any]]:
+    """Validate and reduce an arbitrary JSON object into a Pinecone-safe metadata filter.
+
+    Allowed fields: author (str), source_domain (str), date (str), rating (number).
+    Allowed ops:
+      - Strings: $eq, $in
+      - Numbers (rating): $eq, $gt, $gte, $lt, $lte, $in
+      - Dates (as strings): $eq, $gte, $lte
+    Returns None if nothing valid remains.
+    """
+    if not isinstance(raw, dict):
+        return None
+
+    allowed_fields = {
+        "author": "str",
+        "source_domain": "str",
+        "date": "str",
+        "rating": "num",
+    }
+    string_ops = {"$eq", "$in"}
+    number_ops = {"$eq", "$gt", "$gte", "$lt", "$lte", "$in"}
+    date_ops = {"$eq", "$gte", "$lte"}
+
+    sanitized: Dict[str, Any] = {}
+
+    for field, constraint in raw.items():
+        if field not in allowed_fields:
+            continue
+        expected_type = allowed_fields[field]
+
+        # Allow shorthand: { field: value } -> { field: { "$eq": value } }
+        if not isinstance(constraint, dict):
+            constraint = {"$eq": constraint}
+
+        if not isinstance(constraint, dict):
+            continue
+
+        clean_ops: Dict[str, Any] = {}
+        ops_allowed = date_ops if field == "date" else (number_ops if field == "rating" else string_ops)
+
+        for op, value in constraint.items():
+            if op not in ops_allowed:
+                continue
+            if expected_type == "str":
+                if op == "$in":
+                    if isinstance(value, list) and all(isinstance(v, str) and v.strip() for v in value):
+                        clean_ops[op] = value
+                else:
+                    if isinstance(value, str) and value.strip():
+                        clean_ops[op] = value
+            elif expected_type == "num":
+                if op == "$in":
+                    if isinstance(value, list):
+                        nums = []
+                        for v in value:
+                            if isinstance(v, (int, float)):
+                                nums.append(float(v))
+                        if nums:
+                            clean_ops[op] = nums
+                else:
+                    if isinstance(value, (int, float)):
+                        clean_ops[op] = float(value)
+            else:  # date as string
+                if isinstance(value, str) and value.strip():
+                    clean_ops[op] = value
+
+        if clean_ops:
+            sanitized[field] = clean_ops
+
+    return sanitized or None
+
+
+def _extract_filter(user_query: str) -> Optional[Dict[str, Any]]:
+    """Use the LLM to infer a Pinecone metadata filter from a natural-language query.
+
+    Returns a dict suitable for Pinecone's `filter` parameter or None.
+    """
+    client = _llm_client()
+    sys = (
+        "You extract metadata filters for a product reviews RAG system. "
+        "Only output strict JSON with a top-level key 'filter'. "
+        "Supported fields: author (string), source_domain (string), date (YYYY-MM-DD string), rating (number). "
+        "Supported operators: $eq, $in for strings; $eq, $gt, $gte, $lt, $lte, $in for rating; $eq, $gte, $lte for date. "
+        "If no filter is implied, set filter to null. Do not include unsupported fields or operators."
+    )
+    # Few-shot examples to steer consistent structure
+    examples = [
+        {
+            "q": "What's the review added by Jose?",
+            "f": {"author": {"$eq": "Jose"}},
+        },
+        {
+            "q": "Show reviews from softwareadvice.com in 2024",
+            "f": {"source_domain": {"$eq": "softwareadvice.com"}, "date": {"$gte": "2024-01-01", "$lte": "2024-12-31"}},
+        },
+        {
+            "q": "What are users rating it above 4?",
+            "f": {"rating": {"$gt": 4}},
+        },
+        {
+            "q": "Summarize pros and cons",
+            "f": None,
+        },
+    ]
+    instruction = {
+        "examples": examples,
+        "output_schema": {
+            "filter": "object|null; Pinecone metadata filter built only from allowed fields and operators",
+        },
+    }
+    messages = [
+        {"role": "system", "content": sys},
+        {"role": "user", "content": json.dumps({"instruction": instruction, "query": user_query})},
+    ]
+    try:
+        out = client.chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=messages,
+            temperature=0,
+            max_tokens=200,
+            response_format={"type": "json_object"},
+        )
+        content = out.choices[0].message.content
+        obj = json.loads(content)
+        filt = obj.get("filter")
+        return _sanitize_pinecone_filter(filt)
+    except Exception:
+        return None
+
+
 @app.get("/health")
 def health():
     ok = bool(config.PINECONE_API_KEY)
@@ -105,8 +236,11 @@ def query_endpoint(req: QueryRequest):
     embedder = Embedder()
     ensure_index(embedder.dim)
     search_text = _rewrite_query(req.query, req.history)
+    auto_filter = _extract_filter(req.query)
+    effective_filter = req.filter if req.filter is not None else auto_filter
+    print(effective_filter)
     qvec = embedder.embed([search_text])[0].tolist()
-    res = query(qvec, top_k=req.top_k, filter=req.filter)
+    res = query(qvec, top_k=req.top_k, filter=effective_filter)
     matches = res.matches or []
     contexts = [{"id": m.id, "score": m.score, "metadata": m.metadata} for m in matches]
     return _generate_answer(req.query, contexts)
