@@ -72,7 +72,7 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
         f"User question: {query}\n\n"
         f"Context snippets:\n{context_text}\n\n"
         "Answer directly using only the context above. Cite claims with [n] where n is the snippet number. "
-        "Then provide 2-3 short follow-up suggestions."
+
     )
     out = client.chat.completions.create(
         model=config.OPENAI_MODEL,
