@@ -30,7 +30,12 @@ def _llm_client():
 
 def _rewrite_query(user_query: str, history: Optional[List[Dict[str, str]]]) -> str:
     client = _llm_client()
-    sys = "Rewrite the user query to be best for semantic search over software product reviews. Keep it short; no punctuation."
+    sys = (
+        "Rewrite the user query for the best semantic search over customer reviews of the 'Reviews for Jira' app. "
+        "Output a short, search-oriented phrase with no punctuation or quotes. "
+        "Preserve key entities and filters if present (features, versions, authors, sources, dates, ratings). "
+        "Do not add or infer information; do not change the meaning."
+    )
     msgs = [{"role": "system", "content": sys}]
     if history:
         msgs += history[-4:]
@@ -58,13 +63,16 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
         })
     context_text = "\n\n".join([f"[{i}] {c['snippet']}" for i, c in enumerate(citations, 1)])
     sys = (
-        "You are a helpful assistant answering questions using the provided review snippets. "
-        "Cite sources as [1], [2], etc. Be concise and specific. If context is insufficient, say so."
+        "You are a product expert answering questions about the 'Reviews for Jira' app using ONLY the provided user review snippets. "
+        "Cite sources with bracket numbers [1], [2], etc., matching the snippet indices shown in the context. "
+        "Be concise, specific, and factual; prefer concrete details (ratings, dates, sources). "
+        "If the context is insufficient to answer, say so explicitly and avoid speculation."
     )
     prompt = (
         f"User question: {query}\n\n"
         f"Context snippets:\n{context_text}\n\n"
-        "Answer the question using only the context above. Then provide 2-3 short follow-up suggestions."
+        "Answer directly using only the context above. Cite claims with [n] where n is the snippet number. "
+        "Then provide 2-3 short follow-up suggestions."
     )
     out = client.chat.completions.create(
         model=config.OPENAI_MODEL,
@@ -74,9 +82,9 @@ def _generate_answer(query: str, contexts: List[Dict[str, Any]]) -> Dict[str, An
     )
     answer = out.choices[0].message.content.strip()
     follow_ups = [
-        "Summarize key pros and cons.",
-        "Any trends by date or version?",
-        "Provide quotes supporting the answer.",
+        "Fetch the top rated review from www.softwareadvice.com.",
+        "Whats are the pros from Elena V.",
+        "What is Mrudul P's concern about Jira?",
     ]
     return {"answer": answer, "citations": citations, "follow_ups": follow_ups}
 
@@ -160,7 +168,7 @@ def _extract_filter(user_query: str) -> Optional[Dict[str, Any]]:
     """
     client = _llm_client()
     sys = (
-        "You extract metadata filters for a product reviews RAG system. "
+        "Extract Pinecone metadata filters from natural language queries about the 'Reviews for Jira' app. "
         "Only output strict JSON with a top-level key 'filter'. "
         "Supported fields: author (string), source_domain (string), date (YYYY-MM-DD string), rating (number). "
         "Supported operators: $eq, $in for strings; $eq, $gt, $gte, $lt, $lte, $in for rating; $eq, $gte, $lte for date. "
